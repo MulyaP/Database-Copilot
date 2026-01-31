@@ -1,26 +1,28 @@
 "use client";
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
-import LoginPage from "./login/page";
-import { HomePage } from "./pages/HomePage";
 
-export default function Home() {
+interface AuthGuardProps {
+  children: React.ReactNode;
+}
+
+export const AuthGuard = ({ children }: AuthGuardProps) => {
   const router = useRouter();
 
   useEffect(() => {
     const accessToken = localStorage.getItem('access_token');
     
-    if (accessToken) {
-      router.push('/home');
+    if (!accessToken) {
+      router.push('/');
     }
   }, [router]);
 
   // Check if user is authenticated
   const accessToken = typeof window !== 'undefined' ? localStorage.getItem('access_token') : null;
   
-  if (accessToken) {
-    return <HomePage />;
+  if (!accessToken) {
+    return null; // Will redirect to login
   }
 
-  return <LoginPage />;
-}
+  return <>{children}</>;
+};

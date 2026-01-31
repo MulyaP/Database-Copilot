@@ -1,6 +1,7 @@
 "use client";
 import { useSearchParams, useRouter } from "next/navigation";
 import { ChatPage } from "../pages/ChatPage";
+import { AuthGuard } from "../components/AuthGuard";
 
 export default function Chat() {
   const searchParams = useSearchParams();
@@ -12,9 +13,9 @@ export default function Chat() {
     return null;
   }
 
-  const handleDisconnect = () => {
-    router.push("/");
-  };
-
-  return <ChatPage connectionId={connectionId} onDisconnect={handleDisconnect} />;
+  return (
+    <AuthGuard>
+      <ChatPage connectionId={connectionId} />
+    </AuthGuard>
+  );
 }

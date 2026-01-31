@@ -8,5 +8,7 @@ export interface Credentials {
 export interface DatabaseConnection {
   dbType: DatabaseType;
   dbProvider: DatabaseProvider;
+  dbName: string;
   credentials: Credentials;
+  user_id: string | undefined;
 }

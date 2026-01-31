@@ -1,6 +1,8 @@
 import uuid
 from typing import Dict, Any
 from ..models.database import DatabaseConnection, ConnectionResponse
+from app.services.db_connect import get_supabase_client
+
 
 # Optional imports for database drivers
 try:
@@ -25,12 +27,55 @@ except ImportError:
 
 class DatabaseService:
     def __init__(self):
-        self.connections: Dict[str, Any] = {}
+        self.active_connection: str|None = None 
+
+    async def check_connection(self, connection_id: str) -> str:
+        # if connection_id in self.connections:
+        #     return True
+
+        supabase = get_supabase_client()
+        
+        if not supabase:
+            return ""
+        
+        result = supabase.table("connections").select("*").eq("id", connection_id).execute()
+        
+        if result.data:
+            return result.data[0]['id']
+        else:
+            return ""
+        
+    async def get_connections(self, user_id: str) -> list[ConnectionResponse]:
+        supabase = get_supabase_client()
+        
+        if not supabase:
+            return []
+        
+        # Fetch connections for the user
+        result = supabase.table("connections").select("*").eq("user_id", user_id).execute()
+        
+        if result.data:
+            # self.connections = {
+            #     str(conn['id']): {
+            #         "provider": conn['db_provider'],
+            #         "connection": conn['credentials']
+            #     }
+            #     for conn in result.data
+            # }
+            # return self.connections
+            return (ConnectionResponse(
+                success=True,
+                message="Connections fetched successfully",
+                connection_id=str(conn['id']),
+                db_name=conn['db_name'],
+                credentials=conn['credentials']
+            ) for conn in result.data)
+        else:
+            return []
     
-    async def connect_database(self, connection: DatabaseConnection) -> ConnectionResponse:
+    async def create_connection(self, connection: DatabaseConnection) -> ConnectionResponse:
         try:
-            connection_id = str(uuid.uuid4())
-            
+            # First, verify the connection actually works
             if connection.db_provider == "mysql":
                 result = await self._connect_mysql(connection.credentials)
             elif connection.db_provider == "postgresql":
@@ -43,22 +88,89 @@ class DatabaseService:
                 return ConnectionResponse(success=False, message="Unsupported database provider")
             
             if result["success"]:
-                self.connections[connection_id] = {
-                    "connection": result["connection"],
-                    "provider": connection.db_provider,
-                    "type": connection.db_type
+                supabase = get_supabase_client()
+                if not supabase:
+                    return ConnectionResponse(success=False, message="Failed to initialize backend Supabase client")
+
+                connection_data = {
+                    "user_id": connection.user_id,
+                    "db_name": connection.db_name,
+                    "db_provider_name": connection.db_provider,
+                    "credentials": connection.credentials,
+                    "connected": False
                 }
-                return ConnectionResponse(
-                    success=True, 
-                    message="Connected successfully", 
-                    connection_id=connection_id
-                )
+                
+                insert_result = supabase.table("connections").insert(connection_data).execute()
+                
+                if insert_result.data:
+                    new_id = str(insert_result.data[0]['id'])
+                    return await self.connect_database(new_id)
+                else:
+                    return ConnectionResponse(success=False, message="Failed to save connection to database")
             else:
                 return ConnectionResponse(success=False, message=result["error"])
                 
         except Exception as e:
             return ConnectionResponse(success=False, message=f"Connection failed: {str(e)}")
     
+    async def connect_database(self, connection_id: str) -> ConnectionResponse:
+        try:
+            supabase = get_supabase_client()
+            if not supabase:
+                return ConnectionResponse(success=False, message="Failed to initialize backend Supabase client")
+            
+            # Get connection details
+            result = supabase.table("connections").select("*").eq("id", connection_id).execute()
+            if not result.data:
+                return ConnectionResponse(success=False, message="Connection not found")
+            
+            conn_data = result.data[0]
+            credentials = conn_data['credentials']
+            db_provider = conn_data.get('db_provider_name', conn_data['db_name'])
+            
+            # Test the connection
+            if db_provider == "mysql":
+                test_result = await self._connect_mysql(credentials)
+            elif db_provider == "postgresql":
+                test_result = await self._connect_postgresql(credentials)
+            elif db_provider == "supabase":
+                test_result = await self._connect_supabase(credentials)
+            elif db_provider == "mongodb":
+                test_result = await self._connect_mongodb(credentials)
+            else:
+                return ConnectionResponse(success=False, message="Unsupported database provider")
+            
+            if test_result["success"]:
+                # Update connected status and set active connection
+                update_result = supabase.table("connections").update({"connected": True}).eq("id", connection_id).execute()
+                
+                if update_result.data:
+                    self.active_connection = connection_id
+                    return ConnectionResponse(success=True, message="Connected successfully", connection_id=connection_id)
+                else:
+                    return ConnectionResponse(success=False, message="Failed to update connection status")
+            else:
+                return ConnectionResponse(success=False, message=test_result["error"])
+                
+        except Exception as e:
+            return ConnectionResponse(success=False, message=f"Connection failed: {str(e)}")
+    
+    async def disconnect_database(self):
+        if not self.active_connection:
+            return ConnectionResponse(success=False, message="No active connection to disconnect")
+        
+        supabase = get_supabase_client()
+        if not supabase:
+            return ConnectionResponse(success=False, message="Failed to initialize backend Supabase client")
+        
+        update_result = supabase.table("connections").update({"connected": False}).eq("id", self.active_connection).execute()
+        
+        if update_result.data:
+            self.active_connection = None
+            return ConnectionResponse(success=True, message="Disconnected successfully")
+        else:
+            return ConnectionResponse(success=False, message="Failed to disconnect from database")
+
     async def _connect_mysql(self, credentials: Dict[str, str]) -> Dict[str, Any]:
         if mysql is None:
             return {"success": False, "error": "MySQL driver not installed"}
@@ -104,26 +216,23 @@ class DatabaseService:
             return {"success": False, "error": f"PostgreSQL connection failed: {str(e)}"}
     
     async def _connect_supabase(self, credentials: Dict[str, str]) -> Dict[str, Any]:
-        if create_client is None:
-            return {"success": False, "error": "Supabase driver not installed"}
-            
-        required_fields = ["supabase_url", "supabase_anon_key"]
-        if not all(field in credentials for field in required_fields):
-            return {"success": False, "error": "Missing required credentials"}
+        if "connection_string" not in credentials:
+            return {"success": False, "error": "Missing connection string"}
         
         try:
-            supabase: Client = create_client(
-                credentials["supabase_url"],
-                credentials["supabase_anon_key"]
+            from sqlalchemy import create_engine, text
+            
+            # Test connection with timeout and connection pool settings
+            engine = create_engine(
+                credentials["connection_string"],
+                pool_timeout=30,
+                pool_recycle=3600,
+                connect_args={"connect_timeout": 30}
             )
-
-            # Test connection by fetching user info
-            users = (supabase.from_("users").select("id").execute())
-            print(users.data)
-            # response = supabase.auth.get_user()
-            # print(response)
-            # print(supabase)
-            return {"success": True, "connection": supabase}
+            with engine.connect() as connection:
+                connection.execute(text("SELECT 1"))
+            
+            return {"success": True, "connection": engine}
         except Exception as e:
             return {"success": False, "error": f"Supabase connection failed: {str(e)}"}
     

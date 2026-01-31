@@ -1,9 +1,13 @@
 "use client";
 import { useState, useRef, useEffect } from "react";
+import { sendChatMessage } from "../services/api";
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import rehypeHighlight from 'rehype-highlight';
+import 'highlight.js/styles/github-dark.css';
 
 interface Props {
   connectionId: string;
-  onDisconnect: () => void;
 }
 
 interface Message {
@@ -14,7 +18,7 @@ interface Message {
   isTyping?: boolean;
 }
 
-export const ChatPage = ({ connectionId, onDisconnect }: Props) => {
+export const ChatPage = ({ connectionId }: Props) => {
   const [message, setMessage] = useState("");
   const [messages, setMessages] = useState<Message[]>([
     {
@@ -46,20 +50,32 @@ export const ChatPage = ({ connectionId, onDisconnect }: Props) => {
     };
     
     setMessages(prev => [...prev, userMessage]);
+    const currentMessage = message;
     setMessage("");
     setIsLoading(true);
 
-    // Simulate AI typing
-    setTimeout(() => {
+    try {
+      const data = await sendChatMessage(currentMessage, connectionId);
+      
       const aiMessage: Message = {
         id: (Date.now() + 1).toString(),
-        text: "I understand your query. Let me analyze your database and provide you with the information you need. This is a placeholder response - the actual AI integration will be implemented next.",
+        text: data.response || 'Sorry, I encountered an error processing your request.',
         isUser: false,
         timestamp: new Date()
       };
+      
       setMessages(prev => [...prev, aiMessage]);
+    } catch (error) {
+      const errorMessage: Message = {
+        id: (Date.now() + 1).toString(),
+        text: 'Sorry, I encountered an error processing your request. Please try again.',
+        isUser: false,
+        timestamp: new Date()
+      };
+      setMessages(prev => [...prev, errorMessage]);
+    } finally {
       setIsLoading(false);
-    }, 1500);
+    }
   };
 
   return (
@@ -78,15 +94,6 @@ export const ChatPage = ({ connectionId, onDisconnect }: Props) => {
               <p className="text-sm text-slate-300">Connected • ID: {connectionId.slice(0, 8)}...</p>
             </div>
           </div>
-          <button 
-            onClick={onDisconnect}
-            className="flex items-center space-x-2 px-4 py-2 bg-red-500/20 border border-red-500/30 text-red-300 rounded-lg hover:bg-red-500/30 transition-all duration-200"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
-            </svg>
-            <span>Disconnect</span>
-          </button>
         </div>
       </div>
 
@@ -123,7 +130,52 @@ export const ChatPage = ({ connectionId, onDisconnect }: Props) => {
                       ? 'bg-gradient-to-r from-blue-600 to-blue-700 text-white' 
                       : 'bg-white/10 text-white border border-white/20'
                   }`}>
-                    <p className="text-sm leading-relaxed">{msg.text}</p>
+                    {msg.isUser ? (
+                      <p className="text-sm leading-relaxed">{msg.text}</p>
+                    ) : (
+                      <div className="text-sm leading-relaxed prose prose-invert prose-sm max-w-none">
+                        <ReactMarkdown
+                          remarkPlugins={[remarkGfm]}
+                          rehypePlugins={[rehypeHighlight]}
+                          components={{
+                            code: ({node, className, children, ...props}: any) => {
+                              const match = /language-(\w+)/.exec(className || '');
+                              const isInline = !props['data-language'];
+                              return !isInline && match ? (
+                                <pre className="bg-slate-800 rounded-lg p-3 overflow-x-auto">
+                                  <code className={className} {...props}>
+                                    {children}
+                                  </code>
+                                </pre>
+                              ) : (
+                                <code className="bg-slate-700 px-1 py-0.5 rounded text-xs" {...props}>
+                                  {children}
+                                </code>
+                              );
+                            },
+                            table: ({children}) => (
+                              <div className="overflow-x-auto">
+                                <table className="min-w-full border border-slate-600 rounded-lg">
+                                  {children}
+                                </table>
+                              </div>
+                            ),
+                            th: ({children}) => (
+                              <th className="border border-slate-600 px-3 py-2 bg-slate-700 text-left">
+                                {children}
+                              </th>
+                            ),
+                            td: ({children}) => (
+                              <td className="border border-slate-600 px-3 py-2">
+                                {children}
+                              </td>
+                            )
+                          }}
+                        >
+                          {msg.text}
+                        </ReactMarkdown>
+                      </div>
+                    )}
                     <p className={`text-xs mt-2 opacity-70 ${
                       msg.isUser ? 'text-blue-100' : 'text-slate-300'
                     }`}>
