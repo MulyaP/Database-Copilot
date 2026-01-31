@@ -114,14 +114,6 @@ We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) f
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## 🆘 Support
-
-If you encounter any issues or have questions:
-
-1. Check the [Installation Guide](INSTALLATION.md)
-2. Review the [API Documentation](http://localhost:8000/docs)
-3. Open an issue on GitHub
-
 ---
 
 **Made with ❤️ for developers who want to talk to their databases**
